@@ -1,13 +1,24 @@
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, ResponseError};
+use actix_web::{get, http::header, post, web, App, HttpResponse, HttpServer, ResponseError};
 use askama::Template;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
+use serde::Deserialize;
 use thiserror::Error;
 
 struct TodoEntry {
     id: u32,
     text: String,
+}
+
+#[derive(Deserialize)]
+struct AddParams {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteParams {
+    id: u32,
 }
 
 #[derive(Template)]
@@ -48,23 +59,36 @@ async fn index(db: web::Data<Pool<SqliteConnectionManager>>) -> Result<HttpRespo
         entries.push(row?);
     }
 
-    /*
-    entries.push(TodoEntry {
-        id: 1,
-        text: "first entry".to_string(),
-    });
-    entries.push(TodoEntry {
-        id: 2,
-        text: "second entry".to_string(),
-    });
-    */
-
     let html = IndexTemplate { entries };
     let response_body = html.render()?;
 
     Ok(HttpResponse::Ok()
         .content_type("text/html")
         .body(response_body))
+}
+
+#[post("/add")]
+async fn add_todo(
+    params: web::Form<AddParams>,
+    db: web::Data<Pool<SqliteConnectionManager>>,
+) -> Result<HttpResponse, MyError> {
+    let conn = db.get()?;
+    conn.execute("INSERT INTO todo (text) VALUES (?)", [&params.text])?;
+    Ok(HttpResponse::SeeOther()
+        .append_header((header::LOCATION, "/"))
+        .finish())
+}
+
+#[post("/delete")]
+async fn delete_todo(
+    params: web::Form<DeleteParams>,
+    db: web::Data<Pool<SqliteConnectionManager>>,
+) -> Result<HttpResponse, MyError> {
+    let conn = db.get()?;
+    conn.execute("DELETE FROM todo WHERE id=?", [params.id])?;
+    Ok(HttpResponse::SeeOther()
+        .append_header((header::LOCATION, "/"))
+        .finish())
 }
 
 #[actix_web::main]
@@ -86,6 +110,8 @@ async fn main() -> Result<(), actix_web::Error> {
     HttpServer::new(move || {
         App::new()
             .service(index)
+            .service(add_todo)
+            .service(delete_todo)
             .app_data(actix_web::web::Data::new(pool.clone())) // https://stackoverflow.com/questions/73255421/actix-web-requested-application-data-is-not-configured-correctly-view-enable-d
     })
     .bind(("127.0.0.1", 8080))?
